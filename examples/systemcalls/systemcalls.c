@@ -3,6 +3,8 @@
 #include <sys/wait.h>
 #include <fcntl.h>
 #include <stdio.h>
+#include <errno.h>
+#include <string.h>
 
 #include "systemcalls.h"
 
@@ -17,7 +19,8 @@ bool do_system(const char *cmd)
 {
 
 /*
- *   Call the system() function with the command set in the cmd
+ * TODO  add your code here
+ *  Call the system() function with the command set in the cmd
  *   and return a boolean true if the system() call completed with success
  *   or false() if it returned a failure
 */
@@ -52,13 +55,14 @@ bool do_exec(int count, ...)
     va_list args;
     va_start(args, count);
     char * command[count+1];
-    for(int i=0; i<count; i++)
+    int i;
+    for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
 
-
+    va_end(args);
 /*
  * TODO:
  *   Execute a system command by calling fork, execv(),
@@ -71,20 +75,37 @@ bool do_exec(int count, ...)
     fflush(NULL);
     pid_t pid = fork();
     if (pid == -1) {
+        printf("fork failed: %s\n", strerror(errno));
         return false;
     }
 
-    int exec_res = execv(command[0], command);
-    if (exec_res == -1) {
-        return false;
+    if (pid == 0) {
+        // in child
+        int exec_res = execv(command[0], command);
+        if (exec_res == -1) {
+            printf("running %s, execv failed: %s\n", command[0], strerror(errno));
+        }
+        exit(127); // execv only returns on error
     }
 
-    pid_t tid = wait(NULL);
-    if (tid == -1) {
+    if (pid > 0) {
+        // in parent
+        printf("waiting for pid %d\n", pid);
+
+        int w_status;
+        pid_t w_pid = waitpid(pid, &w_status, 0);
+        if (w_pid == -1) {
+            printf("wait failed: %s\n", strerror(errno));
+            return false;
+        }
+
+        if (WIFEXITED(w_status) == true && WEXITSTATUS(w_status) == 0) {
+            printf("wait ended ok for %d\n", pid);
+            return true;
+        }
+
         return false;
     }
-
-    va_end(args);
 
     return true;
 }
@@ -100,15 +121,12 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
     va_start(args, count);
     char * command[count+1];
     int i;
-    for(i=0; i<count; i++)\
+    for(i=0; i<count; i++)
     {
         command[i] = va_arg(args, char *);
     }
     command[count] = NULL;
-    // this line is to avoid a compile warning before your implementation is complete
-    // and may be removed
-    command[count] = command[count];
-
+    va_end(args);
 
 /*
  * TODO
@@ -117,29 +135,46 @@ bool do_exec_redirect(const char *outputfile, int count, ...)
  *   The rest of the behaviour is same as do_exec()
  *
 */
-    
     fflush(NULL);
+
+
     pid_t pid = fork();
     if (pid == -1) {
+        printf("fork failed: %s\n", strerror(errno));
         return false;
     }
+
     if (pid == 0) {
+        // in child
         int fd = open(outputfile, O_WRONLY|O_TRUNC|O_CREAT, 0644);
         dup2(fd, 1);
         close(fd);
+
+        int exec_res = execv(command[0], command);
+        if (exec_res == -1) {
+            printf("running %s, execv failed: %s\n", command[0], strerror(errno));
+        }
+        exit(127); // execv only returns on error
     }
 
-    int exec_res = execv(command[0], command);
-    if (exec_res == -1) {
+    if (pid > 0) {
+        // in parent
+        printf("waiting for pid %d\n", pid);
+
+        int w_status;
+        pid_t w_pid = waitpid(pid, &w_status, 0);
+        if (w_pid == -1) {
+            printf("wait failed: %s\n", strerror(errno));
+            return false;
+        }
+
+        if (WIFEXITED(w_status) == true && WEXITSTATUS(w_status) == 0) {
+            printf("wait ended ok for %d\n", pid);
+            return true;
+        }
+
         return false;
     }
 
-    pid_t tid = wait(NULL);
-    if (tid == -1) {
-        return false;
-    }
-
-    va_end(args);
-
-    return true;
+    return false;
 }
