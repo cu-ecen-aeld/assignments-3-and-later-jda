@@ -1,4 +1,4 @@
-#!/usr/bin/bash
+#!/bin/sh
 
 # validate inputs
 if [ $# -ne 2 ]; then
