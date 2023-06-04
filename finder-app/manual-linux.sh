@@ -13,7 +13,7 @@ FINDER_APP_DIR=$(realpath $(dirname $0))
 ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 #SYS_ROOT=/home/jda/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu
-SYS_ROOT=/usr/local/arm-cross-compiler/install/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu
+SYS_ROOT=$(echo `which "${CROSS_COMPILE}"readelf`|sed "s_/bin/${CROSS_COMPILE}readelf_/aarch64-none-linux-gnu_")
 
 if [ $# -lt 1 ]
 then
