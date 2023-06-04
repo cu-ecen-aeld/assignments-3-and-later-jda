@@ -14,6 +14,7 @@ ARCH=arm64
 CROSS_COMPILE=aarch64-none-linux-gnu-
 #SYS_ROOT=/home/jda/gcc-arm-10.2-2020.11-x86_64-aarch64-none-linux-gnu/aarch64-none-linux-gnu
 SYS_ROOT=$(echo `which "${CROSS_COMPILE}"readelf`|sed "s_/bin/${CROSS_COMPILE}readelf_/aarch64-none-linux-gnu_")
+NUM_CPU=$(cat /proc/cpuinfo |grep processor|wc -l)
 
 if [ $# -lt 1 ]
 then
@@ -39,8 +40,8 @@ if [ ! -e ${OUTDIR}/linux-stable/arch/${ARCH}/boot/Image ]; then
     # Add your kernel build steps here
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} mrproper
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} defconfig
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j8 all
-    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j8 modules
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j${NUM_CPU} all
+    make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j${NUM_CPU} modules
     make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} dtbs
 
     
@@ -78,7 +79,7 @@ fi
 
 # Make and install busybox
 #make distclean
-make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j8
+make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} -j${NUM_CPU}
 make ARCH=${ARCH} CROSS_COMPILE=${CROSS_COMPILE} CONFIG_PREFIX=${OUTDIR}/rootfs install
 
 cd "${OUTDIR}/rootfs"
