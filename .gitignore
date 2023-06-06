@@ -1,3 +1,4 @@
+finder-app/writer
 *.o
 build/
 .vscode/
