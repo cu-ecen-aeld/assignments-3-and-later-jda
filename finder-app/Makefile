@@ -1,5 +1,5 @@
 
 default: writer.c
-	${CROSS_COMPILE}gcc -o writer writer.c
+	$(CC) $(CFLAGS) $(INCLUDES) $(OBJS) -o $(TARGET) $(LDFLAGS)
 clean:
 	rm -f writer
