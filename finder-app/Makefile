@@ -1,5 +1,6 @@
+all: writer
 
-default: writer.c
-	$(CC) $(CFLAGS) $(INCLUDES) $(OBJS) -o $(TARGET) $(LDFLAGS)
+writer: writer.c
+	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@ $(LDFLAGS)
 clean:
 	rm -f writer
