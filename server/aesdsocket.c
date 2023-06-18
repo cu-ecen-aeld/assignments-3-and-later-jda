@@ -55,7 +55,7 @@ Logs message to the syslog “Caught signal, exiting” when SIGINT or SIGTERM i
    * Executing the sockettest.sh script from the assignment-autotest subdirectory.
    * Stopping your aesdsocket application.
 
-5. Modify your program to support a -d argument which runs the aesdsocket application as a 
+✅ 5. Modify your program to support a -d argument which runs the aesdsocket application as a 
    daemon. When in daemon mode the program should fork after ensuring it can bind to port 9000.
 
 You can now verify that the ./full-test.sh script from your aesd-assignments repository 
@@ -209,7 +209,8 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 		}
 		outbuf_size += bytes_read;
 
-		if (newline_in_buf(outbuf_size, out_buf) == true) {
+		if (newline_in_buf(bytes_read, recv_buf) == true) {
+			fprintf(stderr, "found newline, done with this\n");
 			break;
 		}
 
@@ -239,7 +240,23 @@ void sig_handler(int s) {
 	errno = saved_errno;
 }
 
+bool want_daemon(int argc, char **argv) {
+	for (int i = 0; i < argc; i++) {
+		if (strcmp(argv[i], "-d") == 0) {
+			printf("want daemon\n");
+			return true;
+		}
+	}
+
+	return false;
+}
+
 int main(int argc, char **argv) {
+	if (want_daemon(argc, argv) == true) {
+		daemon(0,0);
+	}
+	fprintf(stderr, "ready to work!\n");
+
 	// setup syslog
 	openlog(NULL, LOG_PERROR||LOG_PID, LOG_USER);
 
