@@ -7,16 +7,6 @@ on:
             - '*'
 jobs:
     full-test:
-        container: cuaesd/aesd-autotest:assignment4-buildroot
-        runs-on: self-hosted
-        timeout-minutes: 120
-        steps:
-          - uses: actions/checkout@v2
-          - name: Checkout submodules
-            run : git submodule update --init --recursive
-          - name: Run unit test
-            run: ./unit-test.sh
-    full-test:
         container: cuaesd/aesd-autotest:assignment5
         runs-on: self-hosted
         steps:
