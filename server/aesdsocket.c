@@ -1,65 +1,33 @@
 /*
-2. Create a socket based program with name aesdsocket in the “server” directory which:
+✅
+6.1. Modify your socket based program to accept multiple simultaneous connections, 
+     with each connection spawning a new thread to handle the connection.
 
-  ✅ a. Is compiled by the “all” and “default” target of a Makefile in the “server” 
-        directory and supports cross compilation, placing the executable file in the “server” 
-        directory and named aesdsocket.
+     a. Writes to /var/tmp/aesdsocketdata should be synchronized between threads 
+        using a mutex, to ensure data written by synchronous connections is not 
+        intermixed, and not relying on any file system synchronization.
 
-  ✅ b. Opens a stream socket bound to port 9000, failing and returning -1 if any of the 
-        socket connection steps fail.
+     b. The thread should exit when the connection is closed by the client or when 
+        an error occurs in the send or receive steps.
 
-  ✅ c. Listens for and accepts a connection
+     c. Your program should continue to gracefully exit when SIGTERM/SIGINT is 
+        received, after requesting an exit from each thread and waiting for threads 
+        to complete execution.
 
-  ✅ d. Logs message to the syslog “Accepted connection from xxx” where XXXX is the IP address 
-        of the connected client. 
+     d. Use the singly linked list APIs discussed in the video (or your own 
+        implementation if you prefer) to manage threads.
 
-  ✅  e. Receives data over the connection and appends to file /var/tmp/aesdsocketdata, creating 
-        this file if it doesn’t exist.
+6.2. Modify your aesdsocket source code repository to:
 
-Your implementation should use a newline to separate data packets received.
-  In other words a packet is considered complete when a newline character is found in 
-  the input receive stream, and each newline should result in an append to the 
-  /var/tmp/aesdsocketdata file.
+     a. Append a timestamp in the form “timestamp:time” where time is specified by the 
+        RFC 2822 compliant strftime format, followed by newline.  This string 
+        should be appended to the /var/tmp/aesdsocketdata file every 10 seconds, where 
+        the string includes the year, month, day, hour (in 24 hour format) minute and 
+        second representing the system wall clock time.
 
-You may assume the data stream does not include null characters (therefore can be processed 
-  using string handling functions).
+     b. Use appropriate locking to ensure the timestamp is written atomically with 
+        respect to socket data
 
-You may assume the length of the packet will be shorter than the available heap size.
-  In other words, as long as you handle malloc() associated failures with error messages 
-  you may discard associated over-length packets.
-
-   ✅  f. Returns the full content of /var/tmp/aesdsocketdata to the client as soon as the 
-        received data packet completes.
-
-You may assume the total size of all packets sent (and therefore size of /var/tmp/aesdsocketdata) 
-  will be less than the size of the root filesystem, however you may not assume this total 
-  size of all packets sent will be less than the size of the available RAM for the process heap.
-
-   ✅  g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address 
-        of the connected client.
-
-   ✅  h. Restarts accepting connections from new clients forever in a loop until SIGINT or 
-        SIGTERM is received (see below).
-
-   ✅  i. Gracefully exits when SIGINT or SIGTERM is received, completing any open connection 
-        operations, closing any open sockets, and deleting the file /var/tmp/aesdsocketdata.
-
-Logs message to the syslog “Caught signal, exiting” when SIGINT or SIGTERM is received.
-
-3. Install the netcat utility on your Ubuntu development system using sudo apt-get install netcat
-
-4. Verify the sample test script `sockettest.sh` successfully completes against your native 
-   compiled application each time your application is closed and restarted.
-   You can run this manually outside the ./full-test.sh script by:
-   * Starting your aesdsocket application
-   * Executing the sockettest.sh script from the assignment-autotest subdirectory.
-   * Stopping your aesdsocket application.
-
-✅ 5. Modify your program to support a -d argument which runs the aesdsocket application as a 
-   daemon. When in daemon mode the program should fork after ensuring it can bind to port 9000.
-
-You can now verify that the ./full-test.sh script from your aesd-assignments repository 
-  successfully verifies your socket application running as a daemon.
 */
 
 #include <stdio.h>
