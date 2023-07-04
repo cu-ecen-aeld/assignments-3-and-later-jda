@@ -19,13 +19,13 @@
 
 6.2. Modify your aesdsocket source code repository to:
 
-     a. Append a timestamp in the form “timestamp:time” where time is specified by the 
+  ✅ a. Append a timestamp in the form “timestamp:time” where time is specified by the 
         RFC 2822 compliant strftime format, followed by newline.  This string 
         should be appended to the /var/tmp/aesdsocketdata file every 10 seconds, where 
         the string includes the year, month, day, hour (in 24 hour format) minute and 
         second representing the system wall clock time.
 
-     b. Use appropriate locking to ensure the timestamp is written atomically with 
+  ✅ b. Use appropriate locking to ensure the timestamp is written atomically with
         respect to socket data
 
 */
@@ -42,14 +42,23 @@
 #include <errno.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <pthread.h>
+#include <time.h>
 
 #define PORT_NUM "9000"
 #define BACKLOG 20
 #define AESD_SOCK_FAIL -1
 #define WORK_FILE "/var/tmp/aesdsocketdata"
 #define NET_BUF_SIZE 1000
+#define TIMESTAMP_INTERVAL 10
 
 bool cease = false; // when true, wrap up the listen loop.
+pthread_mutex_t work_file_lock = PTHREAD_MUTEX_INITIALIZER;
+
+struct ts_worker_args {
+	FILE *fp;
+	int interval_sec;
+};
 
 // get sockaddr no matter if IPv4 or IPv6,
 // from https://beej.us/guide/bgnet/examples/server.c
@@ -120,16 +129,51 @@ bool newline_in_buf(int bufsize, char *buf) {
 }
 
 void return_work_file_to_client(FILE *fp, int conn_fd) {
-	fseek(fp, 0, SEEK_SET);
-
 	char buffer[NET_BUF_SIZE];
 
+	pthread_mutex_lock(&work_file_lock);
+	fseek(fp, 0, SEEK_SET);
 	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
 		write(conn_fd, buffer, strlen(buffer));
 		//printf("read: %s\n", buffer);
 	}
+	pthread_mutex_unlock(&work_file_lock);
+}
 
+void write_buf_to_work_file(FILE *fp, char *out_buf) {
+	pthread_mutex_lock(&work_file_lock);
+	fseek(fp, 0, SEEK_END);
+	fputs(out_buf, fp);
+	pthread_mutex_unlock(&work_file_lock);
+}
 
+void write_timestamp_to_work_file(FILE *fp, struct tm *stamp_time) {
+	char buffer[40];
+	strftime(buffer, 40, "timestamp:%a %b %d %T %Y\n", stamp_time);
+
+	pthread_mutex_lock(&work_file_lock);
+	fseek(fp, 0, SEEK_END);
+	fputs(buffer, fp);
+	pthread_mutex_unlock(&work_file_lock);
+}
+
+void *timestamp_worker(void *ts_void) {
+	pthread_t pid = pthread_self();
+	fprintf(stderr, "Started timestamp thread with PID %lu\n", pid);
+
+	struct ts_worker_args ts = *(struct ts_worker_args *)ts_void;
+	struct tm *tm_info;
+
+	while (cease == false) {
+		sleep(ts.interval_sec);
+		time_t timer = time(NULL);
+		tm_info = localtime(&timer);
+		if (cease == false) {
+			write_timestamp_to_work_file(ts.fp, tm_info);
+		}
+	}
+
+	return((void *)0);
 }
 
 /*
@@ -188,8 +232,7 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 
 	// flush to file
 	fprintf(stderr, "Got stuff: %s\n", out_buf);
-	fseek(fp, 0, SEEK_END);
-	fputs(out_buf, fp);
+	write_buf_to_work_file(fp, out_buf);
 	
 	free(out_buf);
 	
@@ -248,6 +291,12 @@ int main(int argc, char **argv) {
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
+
+	// start timestamp thread
+	pthread_t ts_tid;
+	struct ts_worker_args tsa = {.fp = fp, .interval_sec = TIMESTAMP_INTERVAL};
+	pthread_create(&ts_tid, NULL, timestamp_worker, &tsa);
+	pthread_join(ts_tid, NULL);
 
 	// accept loop
 	while(cease == false) {

@@ -5,7 +5,7 @@ all: aesdsocket
 default: aesdsocket
 
 aesdsocket: aesdsocket.c
-	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@ $(LDFLAGS) 
+	$(CC) $(CFLAGS) $(INCLUDES) $< -o $@ -pthread $(LDFLAGS)
 
 clean:
 	rm -f aesdsocket
