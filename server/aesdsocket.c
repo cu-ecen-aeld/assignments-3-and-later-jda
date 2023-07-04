@@ -37,6 +37,7 @@
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/queue.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
@@ -58,6 +59,13 @@ pthread_mutex_t work_file_lock = PTHREAD_MUTEX_INITIALIZER;
 struct ts_worker_args {
 	FILE *fp;
 	int interval_sec;
+};
+
+struct ch_worker_args {
+	FILE *fp;
+	char client_addr[INET6_ADDRSTRLEN]; 
+	int conn_fd;
+	bool *finished;
 };
 
 // get sockaddr no matter if IPv4 or IPv6,
@@ -135,7 +143,6 @@ void return_work_file_to_client(FILE *fp, int conn_fd) {
 	fseek(fp, 0, SEEK_SET);
 	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
 		write(conn_fd, buffer, strlen(buffer));
-		//printf("read: %s\n", buffer);
 	}
 	pthread_mutex_unlock(&work_file_lock);
 }
@@ -181,7 +188,10 @@ void *timestamp_worker(void *ts_void) {
   then copy all of fp to conn_fd
   and then log and close the conn;
 */
-void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
+void *handle_conn(void *ch_void) {
+	struct ch_worker_args ch = *(struct ch_worker_args *)ch_void;
+
+	// FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 	char *out_buf; // what we'll write to file
 	char *recv_buf; // what we're working with while reading from sock
 
@@ -195,7 +205,7 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 	int bytes_read = 0;
 	int outbuf_size = 0;
 	while (true) {
-		bytes_read = recv(conn_fd, recv_buf, NET_BUF_SIZE + 1, 0);
+		bytes_read = recv(ch.conn_fd, recv_buf, NET_BUF_SIZE + 1, 0);
 
 		if (bytes_read <= 0) {
 			fprintf(stderr, "read nothing, must be finished\n");
@@ -232,14 +242,16 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 
 	// flush to file
 	fprintf(stderr, "Got stuff: %s\n", out_buf);
-	write_buf_to_work_file(fp, out_buf);
+	write_buf_to_work_file(ch.fp, out_buf);
 	
 	free(out_buf);
 	
-	return_work_file_to_client(fp, conn_fd);
+	return_work_file_to_client(ch.fp, ch.conn_fd);
 
-	close(conn_fd);
-	syslog(LOG_USER||LOG_INFO, "Closed connection from %s", client_addr);
+	close(ch.conn_fd);
+	syslog(LOG_USER||LOG_INFO, "Closed connection from %s", ch.client_addr);
+
+	return((void *)ch_void);
 }
 
 void sig_handler(int s) {
@@ -261,6 +273,14 @@ bool want_daemon(int argc, char **argv) {
 
 	return false;
 }
+
+struct ch_entry {
+	pthread_t tid;
+	bool *finished;
+	SLIST_ENTRY(ch_entry) ch_entries;
+};
+
+SLIST_HEAD(ch_head, ch_entry);
 
 int main(int argc, char **argv) {
 	if (want_daemon(argc, argv) == true) {
@@ -296,7 +316,10 @@ int main(int argc, char **argv) {
 	pthread_t ts_tid;
 	struct ts_worker_args tsa = {.fp = fp, .interval_sec = TIMESTAMP_INTERVAL};
 	pthread_create(&ts_tid, NULL, timestamp_worker, &tsa);
-	pthread_join(ts_tid, NULL);
+	
+	// set up for client handler threads
+	struct ch_head chh;	
+	SLIST_INIT(&chh);
 
 	// accept loop
 	while(cease == false) {
@@ -313,12 +336,41 @@ int main(int argc, char **argv) {
 
 		syslog(LOG_USER||LOG_INFO, "Accepted connection from %s", s);
 
-		if (!fork()) { 
-			close(sock_fd); // child doesn't need the listener
-			handle_conn(fp, s, new_fd);
-			close(new_fd);
-			exit(0);
-		}
+		// struct ch_entry *ch = malloc(sizeof(struct ch_entry));
+		// ch->finished = false;
+
+		struct ch_worker_args *wargs = malloc(sizeof(struct ch_worker_args));
+		wargs->fp = fp;
+		wargs->client_addr[INET6_ADDRSTRLEN] = *s;
+		wargs->conn_fd = new_fd;
+		//wargs->finished = ch->finished; // remember to free wargs first, then ch
+		
+		pthread_t ch_tid;
+		pthread_create(&ch_tid, NULL, handle_conn, wargs);
+		// ch->tid = ch_tid;
+
+		// syslog(LOG_USER||LOG_INFO, "Handling %s in thread %lu", s, ch_tid);		
+		
+		// SLIST_INSERT_HEAD(&chh, ch, ch_entries);
+
+		// close(new_fd);
+
+		// struct ch_entry *ch_cur;
+		// SLIST_FOREACH(ch_cur, &chh, ch_entries) {
+		// 	if(*ch_cur->finished == true) {
+		// 		pthread_t dead_tid = ch_cur->tid;
+		// 		syslog(LOG_USER||LOG_INFO, "thread %lu finished, cleaning up...", dead_tid);
+
+		// 		void *ch_void;
+		// 		pthread_join(ch_cur->tid, &ch_void);
+		// 		free(ch_void);
+
+		// 		SLIST_REMOVE(&chh, ch_cur, ch_entry, ch_entries);
+		// 		free(ch_cur);
+				
+		// 		syslog(LOG_USER||LOG_INFO, "thread %lu cleaned up", dead_tid);
+		// 	}
+		// }
 	}
 
 	fclose(fp);
