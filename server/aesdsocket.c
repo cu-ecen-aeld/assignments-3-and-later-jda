@@ -1,65 +1,40 @@
 /*
-2. Create a socket based program with name aesdsocket in the “server” directory which:
+✅
+6.1. Modify your socket based program to accept multiple simultaneous connections, 
+     with each connection spawning a new thread to handle the connection.
 
-  ✅ a. Is compiled by the “all” and “default” target of a Makefile in the “server” 
-        directory and supports cross compilation, placing the executable file in the “server” 
-        directory and named aesdsocket.
+  ✅ a. Writes to /var/tmp/aesdsocketdata should be synchronized between threads 
+        using a mutex, to ensure data written by synchronous connections is not 
+        intermixed, and not relying on any file system synchronization.
 
-  ✅ b. Opens a stream socket bound to port 9000, failing and returning -1 if any of the 
-        socket connection steps fail.
+  ✅ b. The thread should exit when the connection is closed by the client or when 
+        an error occurs in the send or receive steps.
 
-  ✅ c. Listens for and accepts a connection
+  ✅ c. Your program should continue to gracefully exit when SIGTERM/SIGINT is 
+        received, after requesting an exit from each thread and waiting for threads 
+        to complete execution.
 
-  ✅ d. Logs message to the syslog “Accepted connection from xxx” where XXXX is the IP address 
-        of the connected client. 
+     d. Use the singly linked list APIs discussed in the video (or your own 
+        implementation if you prefer) to manage threads.
 
-  ✅  e. Receives data over the connection and appends to file /var/tmp/aesdsocketdata, creating 
-        this file if it doesn’t exist.
+6.2. Modify your aesdsocket source code repository to:
 
-Your implementation should use a newline to separate data packets received.
-  In other words a packet is considered complete when a newline character is found in 
-  the input receive stream, and each newline should result in an append to the 
-  /var/tmp/aesdsocketdata file.
+  ✅ a. Append a timestamp in the form “timestamp:time” where time is specified by the 
+        RFC 2822 compliant strftime format, followed by newline.  This string 
+        should be appended to the /var/tmp/aesdsocketdata file every 10 seconds, where 
+        the string includes the year, month, day, hour (in 24 hour format) minute and 
+        second representing the system wall clock time.
 
-You may assume the data stream does not include null characters (therefore can be processed 
-  using string handling functions).
+  ✅ b. Use appropriate locking to ensure the timestamp is written atomically with
+        respect to socket data
+*/
 
-You may assume the length of the packet will be shorter than the available heap size.
-  In other words, as long as you handle malloc() associated failures with error messages 
-  you may discard associated over-length packets.
-
-   ✅  f. Returns the full content of /var/tmp/aesdsocketdata to the client as soon as the 
-        received data packet completes.
-
-You may assume the total size of all packets sent (and therefore size of /var/tmp/aesdsocketdata) 
-  will be less than the size of the root filesystem, however you may not assume this total 
-  size of all packets sent will be less than the size of the available RAM for the process heap.
-
-   ✅  g. Logs message to the syslog “Closed connection from XXX” where XXX is the IP address 
-        of the connected client.
-
-   ✅  h. Restarts accepting connections from new clients forever in a loop until SIGINT or 
-        SIGTERM is received (see below).
-
-   ✅  i. Gracefully exits when SIGINT or SIGTERM is received, completing any open connection 
-        operations, closing any open sockets, and deleting the file /var/tmp/aesdsocketdata.
-
-Logs message to the syslog “Caught signal, exiting” when SIGINT or SIGTERM is received.
-
-3. Install the netcat utility on your Ubuntu development system using sudo apt-get install netcat
-
-4. Verify the sample test script `sockettest.sh` successfully completes against your native 
-   compiled application each time your application is closed and restarted.
-   You can run this manually outside the ./full-test.sh script by:
-   * Starting your aesdsocket application
-   * Executing the sockettest.sh script from the assignment-autotest subdirectory.
-   * Stopping your aesdsocket application.
-
-✅ 5. Modify your program to support a -d argument which runs the aesdsocket application as a 
-   daemon. When in daemon mode the program should fork after ensuring it can bind to port 9000.
-
-You can now verify that the ./full-test.sh script from your aesd-assignments repository 
-  successfully verifies your socket application running as a daemon.
+/*
+Make helpers for mutex around linked list.
+Make each thread update their own entry in thread tracking list
+  when finished before returning.
+Can do that by calling function ch_worker_done(&chh, tid) which marks as finished;
+Make helper thread that loops over linked list every N seconds and joins finished threads.
 */
 
 #include <stdio.h>
@@ -69,107 +44,94 @@ You can now verify that the ./full-test.sh script from your aesd-assignments rep
 #include <sys/types.h>
 #include <sys/socket.h>
 #include <sys/wait.h>
+#include <sys/queue.h>
 #include <netdb.h>
 #include <unistd.h>
 #include <errno.h>
 #include <arpa/inet.h>
 #include <stdbool.h>
+#include <pthread.h>
 
-#define PORT_NUM "9000"
-#define BACKLOG 20
-#define AESD_SOCK_FAIL -1
-#define WORK_FILE "/var/tmp/aesdsocketdata"
-#define NET_BUF_SIZE 1000
+#include "aesdsocket.h"
+#include "timestamp.h"
+#include "helpers.h"
 
-bool cease = false; // when true, wrap up the listen loop.
+#define TIMESTAMP_INTERVAL 10
+#define CH_THREAD_REAP_INTERVAL 1
+#define ADDR_BUF_SIZE INET6_ADDRSTRLEN + 1
 
-// get sockaddr no matter if IPv4 or IPv6,
-// from https://beej.us/guide/bgnet/examples/server.c
-void *get_in_addr(struct sockaddr *sa)
-{
-	if (sa->sa_family == AF_INET) {
-		return &(((struct sockaddr_in*)sa)->sin_addr);
+bool cease = false;
+pthread_mutex_t work_file_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t ch_thread_status_lock = PTHREAD_MUTEX_INITIALIZER;
+
+struct ch_worker_args {
+	FILE *fp;
+	char client_addr[ADDR_BUF_SIZE]; 
+	int conn_fd;
+};
+
+struct ch_entry {
+	pthread_t tid;
+	bool finished;
+	SLIST_ENTRY(ch_entry) ch_entries;
+};
+
+SLIST_HEAD(ch_head, ch_entry);
+struct ch_head chh;	
+
+void *ch_thread_reaper(void *ch_thread_reaper) {
+	pthread_t pid = pthread_self();
+	fprintf(stderr, "Started client handler thread reaper with PID %lu\n", pid);
+
+	struct ch_entry *entry, *ch_temp;
+	
+	while (cease == false) {
+		sleep(CH_THREAD_REAP_INTERVAL);
+
+		// walk thread list and cleanup here
+		pthread_mutex_lock(&ch_thread_status_lock);
+
+		SLIST_FOREACH_SAFE(entry, &chh, ch_entries, ch_temp) {
+			if (entry->finished == true) {
+				SLIST_REMOVE(&chh, entry, ch_entry, ch_entries);
+				syslog(LOG_USER||LOG_INFO, "CH thread reaper cleaned up %lu", entry->tid);
+				free(entry);
+			}
+		}
+
+		pthread_mutex_unlock(&ch_thread_status_lock);
 	}
 
-	return &(((struct sockaddr_in6*)sa)->sin6_addr);
+	return((void *)0);
 }
 
-// returns socket file descriptor on success or exits program on failure.
-int must_bind_port_fd(int backlog, char *port_num) {
-	// set up socket listener
-	struct addrinfo hints;
-	memset(&hints, 0, sizeof(hints)); // init struct
+void ch_reaper_new_thread(pthread_t tid) {
+	struct ch_entry *ch = malloc(sizeof(struct ch_entry));
+	ch->finished = false;
+	ch->tid = tid;
 
-	hints.ai_family = AF_UNSPEC;
-	hints.ai_socktype = SOCK_STREAM;
-	hints.ai_flags = AI_PASSIVE;
-	hints.ai_protocol = IPPROTO_TCP;
-
-	int status, sock_fd;
-	struct addrinfo *result, *rp;
-
-	if ((status = getaddrinfo(NULL, port_num, &hints, &result)) != 0) {
-    	fprintf(stderr, "getaddrinfo error: %s\n", gai_strerror(status));
-		exit(AESD_SOCK_FAIL);
-	}
-
-
-	for (rp = result; rp != NULL; rp = rp->ai_next) {
-		sock_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sock_fd == -1)
-            continue;
-
-        if (bind(sock_fd, rp->ai_addr, rp->ai_addrlen) == 0)
-            break;                  /* Success */
-
-        close(sock_fd);
-	}	
-
-	freeaddrinfo(result);
-
-	if (rp == NULL) {
-		char *err_msg = strerror(errno);
-		fprintf(stderr, "Could not bind: %s\n", err_msg);
-		exit(AESD_SOCK_FAIL);
-	}
-
-	if ((status = listen(sock_fd, backlog)) != 0) {
-		char *err_msg = strerror(errno);
-		fprintf(stderr, "Could not listen: %s\n", err_msg);
-		exit(AESD_SOCK_FAIL);
-	}
-
-	return sock_fd;
+	pthread_mutex_lock(&ch_thread_status_lock);
+	SLIST_INSERT_HEAD(&chh, ch, ch_entries);
+	pthread_mutex_unlock(&ch_thread_status_lock);
 }
 
-bool newline_in_buf(int bufsize, char *buf) {
- 	for (int i = 0; i< bufsize; i++) {
- 		if (buf[i] == '\n') {
- 			return true;
- 		}
- 	}
-	return false;
-}
+void ch_reaper_mark_finished() {
+	pthread_t tid = pthread_self();
+	struct ch_entry *entry;
 
-void return_work_file_to_client(FILE *fp, int conn_fd) {
-	fseek(fp, 0, SEEK_SET);
-
-	char buffer[NET_BUF_SIZE];
-
-	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-		write(conn_fd, buffer, strlen(buffer));
-		//printf("read: %s\n", buffer);
+	pthread_mutex_lock(&ch_thread_status_lock);
+	SLIST_FOREACH(entry, &chh, ch_entries) {
+		if (entry->tid == tid) {
+			entry->finished = true;
+			break;
+		}
 	}
-
-
+	pthread_mutex_unlock(&ch_thread_status_lock);
 }
 
-/*
-  copy from conn_fd to fp until \n, 
-  then copy all of fp to conn_fd
-  and then log and close the conn;
-*/
-void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
+void *handle_conn(void *ch_void) {
+	struct ch_worker_args ch = *(struct ch_worker_args *)ch_void;
+
 	char *out_buf; // what we'll write to file
 	char *recv_buf; // what we're working with while reading from sock
 
@@ -183,7 +145,7 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 	int bytes_read = 0;
 	int outbuf_size = 0;
 	while (true) {
-		bytes_read = recv(conn_fd, recv_buf, NET_BUF_SIZE + 1, 0);
+		bytes_read = recv(ch.conn_fd, recv_buf, NET_BUF_SIZE + 1, 0);
 
 		if (bytes_read <= 0) {
 			fprintf(stderr, "read nothing, must be finished\n");
@@ -195,7 +157,7 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 
 		if (outbuf_size == 0) { // init buf if first time
 			outbuf_size = bytes_read;
-			out_buf = malloc(outbuf_size);
+			out_buf = malloc(outbuf_size + 1);
 			if (out_buf == NULL) {
 				char *err_msg = strerror(errno);
 				fprintf(stderr, "Could not alloc mem for out buffer: %s\n", err_msg);
@@ -220,36 +182,22 @@ void handle_conn(FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 
 	// flush to file
 	fprintf(stderr, "Got stuff: %s\n", out_buf);
-	fseek(fp, 0, SEEK_END);
-	fputs(out_buf, fp);
+	write_buf_to_work_file(ch.fp, out_buf);
 	
 	free(out_buf);
 	
-	return_work_file_to_client(fp, conn_fd);
+	return_work_file_to_client(ch.fp, ch.conn_fd);
 
-	close(conn_fd);
-	syslog(LOG_USER||LOG_INFO, "Closed connection from %s", client_addr);
+	close(ch.conn_fd);
+	syslog(LOG_USER||LOG_INFO, "Closed connection from %s", ch.client_addr);
+	
+	ch_reaper_mark_finished();
+
+	free(ch_void);
+	pthread_exit((void *)0);
 }
 
-void sig_handler(int s) {
-	syslog(LOG_USER||LOG_INFO, "Caught signal, exiting");
-	cease = true;
 
-	int saved_errno = errno;
-	while(waitpid(-1, NULL, WNOHANG) > 0);
-	errno = saved_errno;
-}
-
-bool want_daemon(int argc, char **argv) {
-	for (int i = 0; i < argc; i++) {
-		if (strcmp(argv[i], "-d") == 0) {
-			printf("want daemon\n");
-			return true;
-		}
-	}
-
-	return false;
-}
 
 int main(int argc, char **argv) {
 	if (want_daemon(argc, argv) == true) {
@@ -266,7 +214,7 @@ int main(int argc, char **argv) {
 	int new_fd;
 	struct sockaddr_storage their_addr; // client addr
 	socklen_t sin_size;
-	char s[INET6_ADDRSTRLEN];
+	char s[ADDR_BUF_SIZE];
 
 	FILE *fp = fopen(WORK_FILE, "a+");
 	if (fp == NULL) {
@@ -280,6 +228,18 @@ int main(int argc, char **argv) {
 	sigemptyset(&sa.sa_mask);
 	sigaction(SIGINT, &sa, NULL);
 	sigaction(SIGTERM, &sa, NULL);
+
+	// start timestamp thread
+	pthread_t ts_tid;
+	struct ts_worker_args tsa = {.fp = fp, .interval_sec = TIMESTAMP_INTERVAL};
+	pthread_create(&ts_tid, NULL, timestamp_worker, &tsa);
+	
+	// set up for client handler threads
+	SLIST_INIT(&chh);
+
+	// TODO: start client handler thread reaper
+	pthread_t ch_reaper_tid;
+	pthread_create(&ch_reaper_tid, NULL, ch_thread_reaper, NULL);
 
 	// accept loop
 	while(cease == false) {
@@ -296,14 +256,24 @@ int main(int argc, char **argv) {
 
 		syslog(LOG_USER||LOG_INFO, "Accepted connection from %s", s);
 
-		if (!fork()) { 
-			close(sock_fd); // child doesn't need the listener
-			handle_conn(fp, s, new_fd);
-			close(new_fd);
-			exit(0);
-		}
+		struct ch_worker_args *wargs = malloc(sizeof(struct ch_worker_args));
+		wargs->fp = fp;
+		strncpy(wargs->client_addr, s, ADDR_BUF_SIZE);
+		wargs->conn_fd = new_fd;
+	
+		pthread_t ch_tid;
+		pthread_create(&ch_tid, NULL, handle_conn, wargs);
+
+		ch_reaper_new_thread(ch_tid);
+
+		syslog(LOG_USER||LOG_INFO, "Handling %s in thread %lu", s, ch_tid);		
+		
 	}
 
+	// wait for utility threads to cease
+	pthread_join(ts_tid, NULL);
+	pthread_join(ch_reaper_tid, NULL);
+	
 	fclose(fp);
 	unlink(WORK_FILE);
 
