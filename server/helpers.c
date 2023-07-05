@@ -43,14 +43,15 @@ int must_bind_port_fd(int backlog, char *port_num) {
 		exit(AESD_SOCK_FAIL);
 	}
 
-
 	for (rp = result; rp != NULL; rp = rp->ai_next) {
 		sock_fd = socket(rp->ai_family, rp->ai_socktype, rp->ai_protocol);
-		if (sock_fd == -1)
+		if (sock_fd == -1) {
             continue;
+		}
 
-        if (bind(sock_fd, rp->ai_addr, rp->ai_addrlen) == 0)
+        if (bind(sock_fd, rp->ai_addr, rp->ai_addrlen) == 0) {
             break;                  /* Success */
+        }
 
         close(sock_fd);
 	}	
@@ -60,7 +61,7 @@ int must_bind_port_fd(int backlog, char *port_num) {
 	if (rp == NULL) {
 		char *err_msg = strerror(errno);
 		fprintf(stderr, "Could not bind: %s\n", err_msg);
-		exit(AESD_SOCK_FAIL);
+		return -1;
 	}
 
 	if ((status = listen(sock_fd, backlog)) != 0) {

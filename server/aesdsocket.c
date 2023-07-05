@@ -208,8 +208,15 @@ int main(int argc, char **argv) {
 	// setup syslog
 	openlog(NULL, LOG_PERROR||LOG_PID, LOG_USER);
 
-	int sock_fd = must_bind_port_fd(BACKLOG, PORT_NUM);
+	int sock_fd = -1;
+	while (sock_fd == -1) {
+		sock_fd = must_bind_port_fd(BACKLOG, PORT_NUM);
 
+		if (sock_fd == -1) {
+			fprintf(stderr, "could not bind to socket, sleeping...\n");
+			sleep(10);
+		}
+	}
 
 	int new_fd;
 	struct sockaddr_storage their_addr; // client addr
@@ -270,9 +277,13 @@ int main(int argc, char **argv) {
 		
 	}
 
+	shutdown(sock_fd, 0);
+
 	// wait for utility threads to cease
 	pthread_join(ts_tid, NULL);
 	pthread_join(ch_reaper_tid, NULL);
+
+	close(sock_fd);
 	
 	fclose(fp);
 	unlink(WORK_FILE);
