@@ -7,10 +7,10 @@ default: aesdsocket
 aesdsocket: aesdsocket.o timestamp.o helpers.o
 	$(CC) $(CFLAGS) $(INCLUDES) $^ -o $@ -pthread -ggdb -O0 $(LDFLAGS)
 
-timestamp.o: timestamp.c 
+timestamp.o: timestamp.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $^ -Wall -pthread -ggdb -O0 $(LDFLAGS)
 
-helpers.o: helpers.c 
+helpers.o: helpers.c
 	$(CC) $(CFLAGS) $(INCLUDES) -c $^ -Wall -pthread -ggdb -O0 $(LDFLAGS)
 
 aesdsocket.o: aesdsocket.c
@@ -19,4 +19,4 @@ aesdsocket.o: aesdsocket.c
 
 clean:
 	rm -f aesdsocket
-	rm *.o
+	rm -f *.o
