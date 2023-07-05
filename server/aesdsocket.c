@@ -30,10 +30,11 @@
 */
 
 /*
-Make helpers for mutex around linked list
+Make helpers for mutex around linked list.
 Make each thread update their own entry in thread tracking list
-  when finished.
-Make helper thread that joins finished threads.
+  when finished before returning.
+Can do that by calling function ch_worker_done(&chh, tid) which marks as finished;
+Make helper thread that loops over linked list every N seconds and joins finished threads.
 */
 
 #include <stdio.h>
@@ -56,13 +57,16 @@ Make helper thread that joins finished threads.
 #include "helpers.h"
 
 #define TIMESTAMP_INTERVAL 10
+#define CH_THREAD_REAP_INTERVAL 1
+#define ADDR_BUF_SIZE INET6_ADDRSTRLEN + 1
 
 bool cease = false;
 pthread_mutex_t work_file_lock = PTHREAD_MUTEX_INITIALIZER;
+pthread_mutex_t ch_thread_status_lock = PTHREAD_MUTEX_INITIALIZER;
 
 struct ch_worker_args {
 	FILE *fp;
-	char client_addr[INET6_ADDRSTRLEN]; 
+	char client_addr[ADDR_BUF_SIZE]; 
 	int conn_fd;
 };
 
@@ -73,17 +77,61 @@ struct ch_entry {
 };
 
 SLIST_HEAD(ch_head, ch_entry);
+struct ch_head chh;	
 
+void *ch_thread_reaper(void *ch_thread_reaper) {
+	pthread_t pid = pthread_self();
+	fprintf(stderr, "Started client handler thread reaper with PID %lu\n", pid);
 
-/*
-  copy from conn_fd to fp until \n, 
-  then copy all of fp to conn_fd
-  and then log and close the conn;
-*/
+	struct ch_entry *entry, *ch_temp;
+	
+	while (cease == false) {
+		sleep(CH_THREAD_REAP_INTERVAL);
+
+		// walk thread list and cleanup here
+		pthread_mutex_lock(&ch_thread_status_lock);
+
+		SLIST_FOREACH_SAFE(entry, &chh, ch_entries, ch_temp) {
+			if (entry->finished == true) {
+				SLIST_REMOVE(&chh, entry, ch_entry, ch_entries);
+				syslog(LOG_USER||LOG_INFO, "CH thread reaper cleaned up %lu", entry->tid);
+				free(entry);
+			}
+		}
+
+		pthread_mutex_unlock(&ch_thread_status_lock);
+	}
+
+	return((void *)0);
+}
+
+void ch_reaper_new_thread(pthread_t tid) {
+	struct ch_entry *ch = malloc(sizeof(struct ch_entry));
+	ch->finished = false;
+	ch->tid = tid;
+
+	pthread_mutex_lock(&ch_thread_status_lock);
+	SLIST_INSERT_HEAD(&chh, ch, ch_entries);
+	pthread_mutex_unlock(&ch_thread_status_lock);
+}
+
+void ch_reaper_mark_finished() {
+	pthread_t tid = pthread_self();
+	struct ch_entry *entry;
+
+	pthread_mutex_lock(&ch_thread_status_lock);
+	SLIST_FOREACH(entry, &chh, ch_entries) {
+		if (entry->tid == tid) {
+			entry->finished = true;
+			break;
+		}
+	}
+	pthread_mutex_unlock(&ch_thread_status_lock);
+}
+
 void *handle_conn(void *ch_void) {
 	struct ch_worker_args ch = *(struct ch_worker_args *)ch_void;
 
-	// FILE *fp, char client_addr[INET6_ADDRSTRLEN], int conn_fd) {
 	char *out_buf; // what we'll write to file
 	char *recv_buf; // what we're working with while reading from sock
 
@@ -109,7 +157,7 @@ void *handle_conn(void *ch_void) {
 
 		if (outbuf_size == 0) { // init buf if first time
 			outbuf_size = bytes_read;
-			out_buf = malloc(outbuf_size);
+			out_buf = malloc(outbuf_size + 1);
 			if (out_buf == NULL) {
 				char *err_msg = strerror(errno);
 				fprintf(stderr, "Could not alloc mem for out buffer: %s\n", err_msg);
@@ -142,9 +190,14 @@ void *handle_conn(void *ch_void) {
 
 	close(ch.conn_fd);
 	syslog(LOG_USER||LOG_INFO, "Closed connection from %s", ch.client_addr);
+	
+	ch_reaper_mark_finished();
 
-	return((void *)ch_void);
+	free(ch_void);
+	pthread_exit((void *)0);
 }
+
+
 
 int main(int argc, char **argv) {
 	if (want_daemon(argc, argv) == true) {
@@ -161,7 +214,7 @@ int main(int argc, char **argv) {
 	int new_fd;
 	struct sockaddr_storage their_addr; // client addr
 	socklen_t sin_size;
-	char s[INET6_ADDRSTRLEN];
+	char s[ADDR_BUF_SIZE];
 
 	FILE *fp = fopen(WORK_FILE, "a+");
 	if (fp == NULL) {
@@ -182,8 +235,11 @@ int main(int argc, char **argv) {
 	pthread_create(&ts_tid, NULL, timestamp_worker, &tsa);
 	
 	// set up for client handler threads
-	struct ch_head chh;	
 	SLIST_INIT(&chh);
+
+	// TODO: start client handler thread reaper
+	pthread_t ch_reaper_tid;
+	pthread_create(&ch_reaper_tid, NULL, ch_thread_reaper, NULL);
 
 	// accept loop
 	while(cease == false) {
@@ -200,43 +256,24 @@ int main(int argc, char **argv) {
 
 		syslog(LOG_USER||LOG_INFO, "Accepted connection from %s", s);
 
-		// struct ch_entry *ch = malloc(sizeof(struct ch_entry));
-		// ch->finished = false;
-
 		struct ch_worker_args *wargs = malloc(sizeof(struct ch_worker_args));
 		wargs->fp = fp;
-		wargs->client_addr[INET6_ADDRSTRLEN] = *s;
+		strncpy(wargs->client_addr, s, ADDR_BUF_SIZE);
 		wargs->conn_fd = new_fd;
-		//wargs->finished = ch->finished; // remember to free wargs first, then ch
-		
+	
 		pthread_t ch_tid;
 		pthread_create(&ch_tid, NULL, handle_conn, wargs);
-		// ch->tid = ch_tid;
 
-		// syslog(LOG_USER||LOG_INFO, "Handling %s in thread %lu", s, ch_tid);		
+		ch_reaper_new_thread(ch_tid);
+
+		syslog(LOG_USER||LOG_INFO, "Handling %s in thread %lu", s, ch_tid);		
 		
-		// SLIST_INSERT_HEAD(&chh, ch, ch_entries);
-
-		// close(new_fd);
-
-		// struct ch_entry *ch_cur;
-		// SLIST_FOREACH(ch_cur, &chh, ch_entries) {
-		// 	if(*ch_cur->finished == true) {
-		// 		pthread_t dead_tid = ch_cur->tid;
-		// 		syslog(LOG_USER||LOG_INFO, "thread %lu finished, cleaning up...", dead_tid);
-
-		// 		void *ch_void;
-		// 		pthread_join(ch_cur->tid, &ch_void);
-		// 		free(ch_void);
-
-		// 		SLIST_REMOVE(&chh, ch_cur, ch_entry, ch_entries);
-		// 		free(ch_cur);
-				
-		// 		syslog(LOG_USER||LOG_INFO, "thread %lu cleaned up", dead_tid);
-		// 	}
-		// }
 	}
 
+	// wait for utility threads to cease
+	pthread_join(ts_tid, NULL);
+	pthread_join(ch_reaper_tid, NULL);
+	
 	fclose(fp);
 	unlink(WORK_FILE);
 
