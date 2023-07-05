@@ -201,7 +201,10 @@ void *handle_conn(void *ch_void) {
 
 int main(int argc, char **argv) {
 	if (want_daemon(argc, argv) == true) {
-		daemon(0,0);
+		int daemon_err = daemon(0,0);
+		if (daemon_err < 0) {
+			fprintf(stderr, "failed to daemonize :(\n");
+		}
 	}
 	fprintf(stderr, "ready to work!\n");
 

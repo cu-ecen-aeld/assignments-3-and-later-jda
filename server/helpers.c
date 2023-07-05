@@ -88,7 +88,10 @@ void return_work_file_to_client(FILE *fp, int conn_fd) {
 	pthread_mutex_lock(&work_file_lock);
 	fseek(fp, 0, SEEK_SET);
 	while (fgets(buffer, sizeof(buffer), fp) != NULL) {
-		write(conn_fd, buffer, strlen(buffer));
+		int wr_err = write(conn_fd, buffer, strlen(buffer));
+		if (wr_err < 0) {
+			syslog(LOG_USER||LOG_ERR, "couldn't write to client: %s", gai_strerror(wr_err));
+		}
 	}
 	pthread_mutex_unlock(&work_file_lock);
 }
