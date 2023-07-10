@@ -1,7 +1,9 @@
 finder-app/writer
-server/aesdsocket
-server/valgrind-out.txt
 *.o
 build/
 .vscode/
 *.log
+test.sh.log
+aesdsocket
+server/aesdsocket
+server/valgrind-out.txt
