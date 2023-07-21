@@ -14,6 +14,7 @@ And see:
   1c:   d503201f        nop
 ```
 at 0x10 bytes in, CPU was trying to store(_str_) value of wzr at address x1.
+We look in faulty.c and see the only assignment in faulty_write() is on line 53.
 
 ## Oops
 ```
