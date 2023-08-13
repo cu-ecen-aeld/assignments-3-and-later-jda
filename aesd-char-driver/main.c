@@ -21,13 +21,12 @@
 int aesd_major =   0; // use dynamic major
 int aesd_minor =   0;
 
-MODULE_AUTHOR("Your Name Here"); /** TODO: fill in your name **/
+MODULE_AUTHOR("Jade Angrboða");
 MODULE_LICENSE("Dual BSD/GPL");
 
 struct aesd_dev aesd_device;
 
-int aesd_open(struct inode *inode, struct file *filp)
-{
+int aesd_open(struct inode *inode, struct file *filp) {
     PDEBUG("open");
     /**
      * TODO: handle open
@@ -35,8 +34,7 @@ int aesd_open(struct inode *inode, struct file *filp)
     return 0;
 }
 
-int aesd_release(struct inode *inode, struct file *filp)
-{
+int aesd_release(struct inode *inode, struct file *filp) {
     PDEBUG("release");
     /**
      * TODO: handle release
@@ -45,8 +43,7 @@ int aesd_release(struct inode *inode, struct file *filp)
 }
 
 ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
-                loff_t *f_pos)
-{
+                loff_t *f_pos) {
     ssize_t retval = 0;
     PDEBUG("read %zu bytes with offset %lld",count,*f_pos);
     /**
@@ -56,8 +53,7 @@ ssize_t aesd_read(struct file *filp, char __user *buf, size_t count,
 }
 
 ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
-                loff_t *f_pos)
-{
+                loff_t *f_pos) {
     ssize_t retval = -ENOMEM;
     PDEBUG("write %zu bytes with offset %lld",count,*f_pos);
     /**
@@ -65,6 +61,7 @@ ssize_t aesd_write(struct file *filp, const char __user *buf, size_t count,
      */
     return retval;
 }
+
 struct file_operations aesd_fops = {
     .owner =    THIS_MODULE,
     .read =     aesd_read,
@@ -73,8 +70,7 @@ struct file_operations aesd_fops = {
     .release =  aesd_release,
 };
 
-static int aesd_setup_cdev(struct aesd_dev *dev)
-{
+static int aesd_setup_cdev(struct aesd_dev *dev) {
     int err, devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_init(&dev->cdev, &aesd_fops);
@@ -89,8 +85,7 @@ static int aesd_setup_cdev(struct aesd_dev *dev)
 
 
 
-int aesd_init_module(void)
-{
+int aesd_init_module(void) {
     dev_t dev = 0;
     int result;
     result = alloc_chrdev_region(&dev, aesd_minor, 1,
@@ -115,8 +110,7 @@ int aesd_init_module(void)
 
 }
 
-void aesd_cleanup_module(void)
-{
+void aesd_cleanup_module(void) {
     dev_t devno = MKDEV(aesd_major, aesd_minor);
 
     cdev_del(&aesd_device.cdev);
